@@ -1,5 +1,3 @@
-# COTprompt
-run:
 python train.py \
   --seed 1 \
   --trainer NLPrompt \
@@ -10,4 +8,3 @@ python train.py \
   DATASET.USE_OT True \
   OPTIM.MAX_EPOCH 50 \
   TRAIN.CHECKPOINT_FREQ 10
-
