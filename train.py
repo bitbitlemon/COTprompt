@@ -27,6 +27,8 @@ import datasets.imagenet
 
 import datasets.food101n
 
+import datasets.cifar100n
+
 import datasets.imagenet_sketch
 import datasets.imagenetv2
 import datasets.imagenet_a

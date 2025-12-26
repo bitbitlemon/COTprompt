@@ -42,36 +42,43 @@ def get_masks(argmax_plabels, noisy_labels, gt_labels, selected_mask):
 
 def curriculum_structure_aware_PL(features, P, top_percent, L=None,
                                     reg_feat=2., reg_lab=2., temp=1, device=None, version='fast', reg_e=0.01, reg_sparsity=None):
-    if ot is None:
-        raise ImportError("Python Optimal Transport package `pot` (import ot) is required for OT-based curriculum PL.")
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    if ot is None:
+        total = P.shape[0]
+        P = P.double().to(device)
+        row_sum = torch.clamp(torch.sum(P, 1, keepdim=True), min=1e-12)
+        coupling = torch.div(P, row_sum)
+        max_values, _ = torch.max(coupling, 1)
+        topk_num = int(max(1, total * top_percent))
+        _, topk_indices = torch.topk(max_values, topk_num)
+        selected_mask = torch.zeros((total,), dtype=torch.bool, device=device)
+        selected_mask[topk_indices] = True
+        return coupling, selected_mask
     a = torch.ones((P.shape[0],), dtype=torch.float64).to(device) / P.shape[0]
     top_percent = min(torch.sum(a).item(), top_percent)
     b = torch.ones((P.shape[1],), dtype=torch.float64).to(device) / P.shape[1] * top_percent
     P = P.double()
     coupling = ot.sinkhorn(a, b, M=-P, reg = reg_e, numItermax=1000, stopThr=1e-6,)
     total = features.size(0)
-
     max_values, _ = torch.max(coupling, 1)
     topk_num = int(total * top_percent)
     _, topk_indices = torch.topk(max_values, topk_num)
-
-    selected_mask = torch.zeros((total,), dtype=torch.bool).cuda()
+    selected_mask = torch.zeros((total,), dtype=torch.bool, device=device)
     selected_mask[topk_indices] = True
     return coupling, selected_mask
 
 def OT_PL(model, eval_loader, num_class, batch_size, feat_dim=512, budget=1., sup_label=None, 
               reg_feat=0.5, reg_lab=0.5, version='fast', Pmode='out', reg_e=0.01, reg_sparsity=None, load_all=True):
     model.eval()
-
-    all_pseudo_labels = torch.zeros((len(eval_loader.dataset), num_class), dtype=torch.float64).cuda()
-    all_noisy_labels = torch.zeros((len(eval_loader.dataset),), dtype=torch.int64).cuda()
-    all_gt_labels = torch.zeros((len(eval_loader.dataset),), dtype=torch.int64).cuda()
-    all_selected_mask = torch.zeros((len(eval_loader.dataset)), dtype=torch.bool).cuda()
-    all_conf = torch.zeros((len(eval_loader.dataset),), dtype=torch.float64).cuda()
-    all_argmax_plabels = torch.zeros((len(eval_loader.dataset),), dtype=torch.int64).cuda()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    all_pseudo_labels = torch.zeros((len(eval_loader.dataset), num_class), dtype=torch.float64).to(device)
+    all_noisy_labels = torch.zeros((len(eval_loader.dataset),), dtype=torch.int64).to(device)
+    all_gt_labels = torch.zeros((len(eval_loader.dataset),), dtype=torch.int64).to(device)
+    all_selected_mask = torch.zeros((len(eval_loader.dataset)), dtype=torch.bool).to(device)
+    all_conf = torch.zeros((len(eval_loader.dataset),), dtype=torch.float64).to(device)
+    all_argmax_plabels = torch.zeros((len(eval_loader.dataset),), dtype=torch.int64).to(device)
     if load_all:
         feat_list = []
         out_list = []
@@ -86,14 +93,14 @@ def OT_PL(model, eval_loader, num_class, batch_size, feat_dim=512, budget=1., su
         index = batch["index"]
 
         with autocast():
-            feat = model.image_encoder(inputs.cuda())
-            logits = model(inputs.cuda())
+            feat = model.image_encoder(inputs.to(device))
+            logits = model(inputs.to(device))
             out = logits.softmax(dim=-1)
 
-        index = index.cuda()
+        index = index.to(device)
 
-        all_noisy_labels[index] = labels.cuda()
-        all_gt_labels[index] = gt_labels.cuda()
+        all_noisy_labels[index] = labels.to(device)
+        all_gt_labels[index] = gt_labels.to(device)
 
         if load_all:
             feat_list.append(feat)
@@ -103,9 +110,9 @@ def OT_PL(model, eval_loader, num_class, batch_size, feat_dim=512, budget=1., su
             continue
 
         if sup_label is not None:
-            L = torch.eye(num_class, dtype=torch.float64)[sup_label[index]].cuda()
+            L = torch.eye(num_class, dtype=torch.float64, device=device)[sup_label[index]]
         else:
-            L = torch.eye(num_class, dtype=torch.float64)[labels].cuda()
+            L = torch.eye(num_class, dtype=torch.float64, device=device)[labels]
 
         if Pmode == 'out':
             P = out
@@ -134,12 +141,12 @@ def OT_PL(model, eval_loader, num_class, batch_size, feat_dim=512, budget=1., su
     if load_all:
         feat = torch.cat(feat_list, dim=0)
         out = torch.cat(out_list, dim=0)
-        index = torch.cat(idx_list, dim=0).cuda()
+        index = torch.cat(idx_list, dim=0).to(device)
         labels = torch.cat(label_list, dim=0)
         if sup_label is not None:
-            L = torch.eye(num_class, dtype=torch.float64)[sup_label[index]].cuda()
+            L = torch.eye(num_class, dtype=torch.float64, device=device)[sup_label[index]]
         else:
-            L = torch.eye(num_class, dtype=torch.float64)[labels].cuda()
+            L = torch.eye(num_class, dtype=torch.float64, device=device)[labels]
         if Pmode == 'out':
             P = out
         if Pmode == 'logP':
