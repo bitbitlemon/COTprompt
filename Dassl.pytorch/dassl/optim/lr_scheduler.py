@@ -19,15 +19,27 @@ class _BaseWarmupScheduler(_LRScheduler):
     ):
         self.successor = successor
         self.warmup_epoch = warmup_epoch
-        super().__init__(optimizer, last_epoch)
+        try:
+            super().__init__(optimizer, last_epoch, verbose=verbose)
+        except TypeError:
+            super().__init__(optimizer, last_epoch)
+            self.verbose = verbose
 
     def get_lr(self):
         raise NotImplementedError
 
     def step(self, epoch=None):
         if self.last_epoch >= self.warmup_epoch:
-            self.successor.step(epoch)
-            self._last_lr = self.successor.get_last_lr()
+            if not hasattr(self.successor, "verbose"):
+                self.successor.verbose = False
+            try:
+                self.successor.step(epoch)
+            except TypeError:
+                self.successor.step()
+            try:
+                self._last_lr = self.successor.get_last_lr()
+            except AttributeError:
+                self._last_lr = self.successor.get_lr()
         else:
             super().step(epoch)
 
