@@ -14,6 +14,21 @@ except Exception:
     download_and_prepare = None
 
 
+def _download_with_fallback(urls, dst):
+    last_err = None
+    for url in urls:
+        try:
+            print(f"Downloading {url} -> {dst}")
+            urllib.request.urlretrieve(url, dst)
+            return True
+        except Exception as e:
+            last_err = e
+            continue
+    if os.path.exists(dst):
+        return True
+    raise RuntimeError(f"Failed to download {os.path.basename(dst)}: {last_err}")
+
+
 @DATASET_REGISTRY.register()
 class CIFAR100N(DatasetBase):
     dataset_dir = "cifar-100n"
@@ -64,7 +79,10 @@ class CIFAR100N(DatasetBase):
         noisy_label = None
         if os.path.exists(noisy_pt):
             try:
-                noise_file = torch.load(noisy_pt, map_location="cpu", weights_only=False)
+                try:
+                    noise_file = torch.load(noisy_pt, map_location="cpu", weights_only=False)
+                except TypeError:
+                    noise_file = torch.load(noisy_pt, map_location="cpu")
                 clean_label = noise_file.get("clean_label", noise_file.get("clean100", None))
                 noisy_label = noise_file.get("noisy_label", noise_file.get("noisy100", None))
             except Exception:
@@ -74,26 +92,33 @@ class CIFAR100N(DatasetBase):
             # Fallback: use TFDS-ordered numpy labels + image order mapping
             ordered_np = os.path.join(labels_dir, "CIFAR-100_human_ordered.npy")
             order_map_np = os.path.join(labels_dir, "image_order_c100.npy")
+            if not os.path.exists(ordered_np):
+                _download_with_fallback(
+                    [
+                        "https://mirrors.tuna.tsinghua.edu.cn/github-raw/UCSC-REAL/cifar-10-100n/master/data/CIFAR-100_human_ordered.npy",
+                        "https://raw.githubusercontent.com/UCSC-REAL/cifar-10-100n/master/data/CIFAR-100_human_ordered.npy",
+                    ],
+                    ordered_np,
+                )
+            if not os.path.exists(order_map_np):
+                _download_with_fallback(
+                    [
+                        "https://mirrors.tuna.tsinghua.edu.cn/github-raw/UCSC-REAL/cifar-10-100n/master/data/image_order_c100.npy",
+                        "https://raw.githubusercontent.com/UCSC-REAL/cifar-10-100n/master/data/image_order_c100.npy",
+                    ],
+                    order_map_np,
+                )
             if not os.path.exists(ordered_np) or not os.path.exists(order_map_np):
-                urls_np = [
-                    ("https://mirrors.tuna.tsinghua.edu.cn/github-raw/UCSC-REAL/cifar-10-100n/master/data/CIFAR-100_human_ordered.npy", ordered_np),
-                    ("https://raw.githubusercontent.com/UCSC-REAL/cifar-10-100n/master/data/CIFAR-100_human_ordered.npy", ordered_np),
-                    ("https://mirrors.tuna.tsinghua.edu.cn/github-raw/UCSC-REAL/cifar-10-100n/master/data/image_order_c100.npy", order_map_np),
-                    ("https://raw.githubusercontent.com/UCSC-REAL/cifar-10-100n/master/data/image_order_c100.npy", order_map_np),
-                ]
-                for i in range(0, len(urls_np), 2):
-                    url1, dst1 = urls_np[i]
-                    url2, dst2 = urls_np[i+1]
-                    try:
-                        if not os.path.exists(dst1):
-                            print(f"Downloading {url1} -> {dst1}")
-                            urllib.request.urlretrieve(url1, dst1)
-                        if not os.path.exists(dst2):
-                            print(f"Downloading {url2} -> {dst2}")
-                            urllib.request.urlretrieve(url2, dst2)
-                        break
-                    except Exception:
-                        continue
+                missing = []
+                if not os.path.exists(ordered_np):
+                    missing.append(ordered_np)
+                if not os.path.exists(order_map_np):
+                    missing.append(order_map_np)
+                raise RuntimeError(
+                    "Missing CIFAR-100N label files: "
+                    + ", ".join(missing)
+                    + ". If the server cannot access the internet, download these files locally and copy them to the same path on the server."
+                )
             ordered = np.load(ordered_np, allow_pickle=True).item()
             order_map = np.load(order_map_np)
             inv_map = np.zeros_like(order_map)
