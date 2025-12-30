@@ -1,12 +1,12 @@
 DATALOADER:
   TRAIN_X:
-    BATCH_SIZE: 32
+    BATCH_SIZE: 128  # [重要修改] 从 32 改为 128。OT算法和对比学习都需要较大的 Batch 来统计分布。
   TEST:
-    BATCH_SIZE: 100
-  NUM_WORKERS: 0
+    BATCH_SIZE: 200  # 推理可以大一点，加快测试速度
+  NUM_WORKERS: 8     # [重要修改] 从 0 改为 8。0 会导致数据加载极慢，GPU 大部分时间在等待 CPU。
 
 INPUT:
-  SIZE: (224, 224)
+  SIZE: (224, 224)   # [关键] 保持这个！这是 CLIP 正常工作的核心。
   INTERPOLATION: "bicubic"
   PIXEL_MEAN: [0.48145466, 0.4578275, 0.40821073]
   PIXEL_STD: [0.26862954, 0.26130258, 0.27577711]
@@ -15,22 +15,23 @@ INPUT:
 OPTIM:
   NAME: "sgd"
   LR: 0.002
-  MAX_EPOCH: 200
+  MAX_EPOCH: 100     # [建议] 200 有点久，对于 CLIP 微调，通常 50-100 个 Epoch 足以收敛。
   LR_SCHEDULER: "cosine"
   WARMUP_EPOCH: 1
   WARMUP_TYPE: "constant"
   WARMUP_CONS_LR: 1e-5
 
 TRAIN:
-  PRINT_FREQ: 5
+  PRINT_FREQ: 20     # 减少日志刷屏频率
 
 MODEL:
   BACKBONE:
     NAME: "RN50"
+
 TRAINER:
   NLPROMPT:
     N_CTX: 16
     CTX_INIT: ""
     CSC: False
     CLASS_TOKEN_POSITION: "end"
-    PREC: "amp"
+    PREC: "amp"      # 混合精度训练，保持开启以节省显存
