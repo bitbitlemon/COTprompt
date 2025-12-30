@@ -26,12 +26,17 @@ def load_clip_to_cpu(cfg):
     backbone_name = cfg.MODEL.BACKBONE.NAME
     url = clip._MODELS[backbone_name]
     model_path = clip._download(url)
+
     try:
         model = torch.jit.load(model_path, map_location="cpu").eval()
         state_dict = None
     except RuntimeError:
         state_dict = torch.load(model_path, map_location="cpu")
-    design_details = {"trainer": 'NLPrompt', "vision_depth": 0, "language_depth": 0, "vision_ctx": 0, "language_ctx": 0}
+    
+    design_details = {"trainer": 'NLPrompt',
+                      "vision_depth": 0,
+                      "language_depth": 0, "vision_ctx": 0,
+                      "language_ctx": 0}
     model = clip.build_model(state_dict or model.state_dict(), design_details)
     return model
 
@@ -46,9 +51,9 @@ class TextEncoder(nn.Module):
 
     def forward(self, prompts, tokenized_prompts):
         x = prompts + self.positional_embedding.type(self.dtype)
-        x = x.permute(1, 0, 2)
+        x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
-        x = x.permute(1, 0, 2)
+        x = x.permute(1, 0, 2)  # LND -> NLD
         x = self.ln_final(x).type(self.dtype)
         x = x[torch.arange(x.shape[0]), tokenized_prompts.argmax(dim=-1)] @ self.text_projection
         return x
@@ -61,12 +66,11 @@ class PromptLearner(nn.Module):
         ctx_init = cfg.TRAINER.NLPROMPT.CTX_INIT
         dtype = clip_model.dtype
         ctx_dim = clip_model.ln_final.weight.shape[0]
-        
-        # --- 优化后的 CoT 模板：针对细粒度数据集 CIFAR-100N ---
-        # 引导模型先提取视觉属性 (Context)，再根据逻辑桥梁 (therefore) 识别类别
+
+        # --- 针对 CIFAR-100N 优化的 CoT 引导逻辑 ---
+        # 强制模型进行逻辑推导：[引导语] -> [可学习特征] -> [逻辑连接词] -> [类别]
         COT_PREFIX = "Let's think step by step. This image contains visual features of"
-        LOGIC_BRIDGE = ", which implies it is a"
-        
+        LOGIC_BRIDGE = ", which indicates it is a"
         cot_len = len(_tokenizer.encode(COT_PREFIX))
 
         if ctx_init:
@@ -78,7 +82,7 @@ class PromptLearner(nn.Module):
             ctx_vectors = embedding[0, 1 : 1 + n_ctx, :]
             prompt_prefix = ctx_init
         else:
-            print(f"Initializing generic context for {n_cls} classes")
+            print(f"Initializing a generic context for {n_cls} classes")
             ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype)
             nn.init.normal_(ctx_vectors, std=0.02)
             prompt_prefix = " ".join(["X"] * n_ctx)
@@ -86,39 +90,42 @@ class PromptLearner(nn.Module):
         self.ctx = nn.Parameter(ctx_vectors)
         classnames = [name.replace("_", " ") for name in classnames]
         
-        # 复合 Prompts 构造 [cite: 193]
+        # 构建完整的细粒度推理提示词
         prompts = [f"{COT_PREFIX} {prompt_prefix}{LOGIC_BRIDGE} {name}." for name in classnames]
         tokenized_prompts = torch.cat([clip.tokenize(p) for p in prompts])
         
         with torch.no_grad():
             embedding = clip_model.token_embedding(tokenized_prompts).type(dtype)
 
-        # 注册 Buffer，确保切片与推理模版完全对齐
-        self.register_buffer("token_prefix", embedding[:, :1 + cot_len, :]) 
-        self.register_buffer("token_suffix", embedding[:, 1 + cot_len + n_ctx :, :]) 
+        # 注册 token 缓冲区，处理 Token 偏移
+        self.register_buffer("token_prefix", embedding[:, :1 + cot_len, :])
+        self.register_buffer("token_suffix", embedding[:, 1 + cot_len + n_ctx :, :])
 
         self.n_cls = n_cls
         self.n_ctx = n_ctx
         self.tokenized_prompts = tokenized_prompts
-        self.name_lens = [len(_tokenizer.encode(name)) for name in classnames]
         self.class_token_position = cfg.TRAINER.NLPROMPT.CLASS_TOKEN_POSITION
 
     def forward(self):
         ctx = self.ctx
         if ctx.dim() == 2:
             ctx = ctx.unsqueeze(0).expand(self.n_cls, -1, -1)
-        prefix, suffix = self.token_prefix, self.token_suffix
+        prefix = self.token_prefix
+        suffix = self.token_suffix
         return torch.cat([prefix, ctx, suffix], dim=1)
 
 class GeneralizedCrossEntropy(nn.Module):
     def __init__(self, q: float = 0.7) -> None:
         super().__init__()
-        self.q, self.epsilon = q, 1e-6
+        self.q = q
+        self.epsilon = 1e-6
         self.softmax = nn.Softmax(dim=1)
+
     def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         p = self.softmax(input)
         p = p[torch.arange(p.shape[0]), target] + self.epsilon
-        return torch.mean((1 - p ** self.q) / self.q)
+        loss = (1 - p ** self.q) / self.q
+        return torch.mean(loss)
 
 class CustomCLIP(nn.Module):
     def __init__(self, cfg, classnames, clip_model):
@@ -134,8 +141,10 @@ class CustomCLIP(nn.Module):
         image_features = self.image_encoder(image.type(self.dtype))
         prompts = self.prompt_learner()
         text_features = self.text_encoder(prompts, self.tokenized_prompts)
+
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
         text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+
         return self.logit_scale.exp() * image_features @ text_features.t()
 
 @TRAINER_REGISTRY.register()
@@ -148,14 +157,22 @@ class NLPrompt(TrainerX):
     def build_model(self):
         cfg = self.cfg
         classnames = self.dm.dataset.classnames
+        print(f"Loading CLIP (backbone: {cfg.MODEL.BACKBONE.NAME})")
         clip_model = load_clip_to_cpu(cfg)
-        if cfg.TRAINER.NLPROMPT.PREC in ["fp32", "amp"]: clip_model.float()
         
+        if cfg.TRAINER.NLPROMPT.PREC in ["fp32", "amp"]:
+            clip_model.float()
+
         print("Building Custom CLIP with Fine-grained CoT Reasoning")
         self.model = CustomCLIP(cfg, classnames, clip_model)
+
         for name, param in self.model.named_parameters():
-            if "prompt_learner" not in name: param.requires_grad_(False)
-            
+            if "prompt_learner" not in name:
+                param.requires_grad_(False)
+
+        if cfg.MODEL.INIT_WEIGHTS:
+            load_pretrained_weights(self.model.prompt_learner, cfg.MODEL.INIT_WEIGHTS)
+
         self.model.to(self.device)
         self.optim = build_optimizer(self.model.prompt_learner, cfg.OPTIM)
         self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)
@@ -197,25 +214,29 @@ class NLPrompt(TrainerX):
             if not osp.exists(model_path): continue
             checkpoint = load_checkpoint(model_path)
             state_dict = checkpoint["state_dict"]
-            # 自动忽略不匹配的旧 Buffer
-            for k in ["token_prefix", "token_suffix"]:
-                if k in state_dict: del state_dict[k]
+            # 自动过滤由于 Prompt 结构变化导致的形状不匹配 Buffer
+            for key in ["token_prefix", "token_suffix"]:
+                if key in state_dict: del state_dict[key]
             self._models[name].load_state_dict(state_dict, strict=False)
 
     def before_epoch(self):
         cfg = self.cfg
         if cfg.DATASET.USE_OT:
+            # 引入课程学习进度表
             budget, _ = curriculum_scheduler(self.epoch, cfg.DATASET.CURRICLUM_EPOCH, begin=cfg.DATASET.BEGIN_RATE, end=1.0) if self.epoch < cfg.DATASET.CURRICLUM_EPOCH else (1.0, 1.0)
             with torch.no_grad():
                 _, noisy_labels, gt_labels, selected_mask, _, argmax_plabels = OT_PL(self.model, self.train_loader_x, num_class=cfg.DATASET.num_class, batch_size=cfg.DATALOADER.TRAIN_X.BATCH_SIZE, budget=budget, reg_feat=cfg.DATASET.REG_FEAT, reg_lab=cfg.DATASET.REG_LAB, Pmode=cfg.DATASET.PMODE, reg_e=cfg.DATASET.REG_E, load_all=True)
                 conf_l, conf_u, low_u = get_masks(argmax_plabels, noisy_labels, None, selected_mask)
             
-            mask = conf_l.cpu().numpy()
-            if np.sum(mask) > 0:
+            if np.sum(conf_l.cpu().numpy()) > 0:
                 self.tmp_train_loader_x = copy.deepcopy(self.train_loader_x)
                 self.train_loader_u = copy.deepcopy(self.train_loader_x)
+                
+                # 分离清洁样本集和噪声样本集
+                mask = conf_l.cpu().numpy()
                 u_mask = torch.logical_or(conf_u, low_u).cpu().numpy()
                 idx_x, idx_u = u_mask.nonzero()[0], mask.nonzero()[0]
+                
                 for i in sorted(idx_x, reverse=True): del self.train_loader_x.dataset.data_source[i]
                 for i in sorted(idx_u, reverse=True): del self.train_loader_u.dataset.data_source[i]
 
