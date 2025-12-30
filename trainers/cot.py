@@ -249,7 +249,7 @@ class CustomCLIP(nn.Module):
 class NLPrompt(TrainerX):
     def __init__(self, cfg):
         super().__init__(cfg)
-        self.GCE_loss = GeneralizedCrossEntropy(q=1.0)
+        self.GCE_loss = nn.CrossEntropyLoss()
         self.num_equal = []
         self.confident_rate = []
         self.clean_rate  = []

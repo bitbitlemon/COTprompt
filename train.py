@@ -51,6 +51,22 @@ def print_args(args, cfg):
     print(cfg)
 
 
+def _merge_cfg_from_file(cfg, file_path):
+    from yacs.config import CfgNode as CN
+
+    last_err = None
+    for enc in ("utf-8", "utf-8-sig", "gbk"):
+        try:
+            with open(file_path, "r", encoding=enc) as f:
+                cfg_str = f.read()
+            loaded_cfg = CN._load_cfg_from_yaml_str(cfg_str)
+            cfg.merge_from_other_cfg(loaded_cfg)
+            return
+        except UnicodeDecodeError as e:
+            last_err = e
+    raise last_err
+
+
 def reset_cfg(cfg, args):
     if args.root:
         cfg.DATASET.ROOT = args.root
@@ -128,11 +144,11 @@ def setup_cfg(args):
 
     # 1. From the dataset config file
     if args.dataset_config_file:
-        cfg.merge_from_file(args.dataset_config_file)
+        _merge_cfg_from_file(cfg, args.dataset_config_file)
 
     # 2. From the method config file
     if args.config_file:
-        cfg.merge_from_file(args.config_file)
+        _merge_cfg_from_file(cfg, args.config_file)
 
     # 3. From input arguments
     reset_cfg(cfg, args)
