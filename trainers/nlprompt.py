@@ -61,13 +61,17 @@ class PromptLearner(nn.Module):
         ctx_init = cfg.TRAINER.NLPROMPT.CTX_INIT
         dtype = clip_model.dtype
         ctx_dim = clip_model.ln_final.weight.shape[0]
-        
-        # --- 优化后的 CoT 模板：针对细粒度数据集 CIFAR-100N ---
-        # 引导模型先提取视觉属性 (Context)，再根据逻辑桥梁 (therefore) 识别类别
-        COT_PREFIX = "Let's think step by step. This image contains visual features of"
-        LOGIC_BRIDGE = ", which implies it is a"
-        
-        cot_len = len(_tokenizer.encode(COT_PREFIX))
+
+        prompt_style = getattr(cfg.TRAINER.NLPROMPT, "PROMPT_STYLE", "coop")
+        prompt_style = str(prompt_style).lower()
+        if prompt_style == "cot":
+            prefix_str = "Let's think step by step. This image contains visual features of"
+            suffix_str = ", which implies it is a"
+        else:
+            prefix_str = "a photo of a"
+            suffix_str = ""
+
+        prefix_len = len(_tokenizer.encode(prefix_str))
 
         if ctx_init:
             ctx_init = ctx_init.replace("_", " ")
@@ -85,17 +89,18 @@ class PromptLearner(nn.Module):
 
         self.ctx = nn.Parameter(ctx_vectors)
         classnames = [name.replace("_", " ") for name in classnames]
-        
-        # 复合 Prompts 构造 [cite: 193]
-        prompts = [f"{COT_PREFIX} {prompt_prefix}{LOGIC_BRIDGE} {name}." for name in classnames]
+
+        if suffix_str:
+            prompts = [f"{prefix_str} {prompt_prefix}{suffix_str} {name}." for name in classnames]
+        else:
+            prompts = [f"{prefix_str} {prompt_prefix} {name}." for name in classnames]
         tokenized_prompts = torch.cat([clip.tokenize(p) for p in prompts])
         
         with torch.no_grad():
             embedding = clip_model.token_embedding(tokenized_prompts).type(dtype)
 
-        # 注册 Buffer，确保切片与推理模版完全对齐
-        self.register_buffer("token_prefix", embedding[:, :1 + cot_len, :]) 
-        self.register_buffer("token_suffix", embedding[:, 1 + cot_len + n_ctx :, :]) 
+        self.register_buffer("token_prefix", embedding[:, :1 + prefix_len, :]) 
+        self.register_buffer("token_suffix", embedding[:, 1 + prefix_len + n_ctx :, :]) 
 
         self.n_cls = n_cls
         self.n_ctx = n_ctx
@@ -141,6 +146,7 @@ class CustomCLIP(nn.Module):
 @TRAINER_REGISTRY.register()
 class NLPrompt(TrainerX):
     def __init__(self, cfg):
+        self.prec = cfg.TRAINER.NLPROMPT.PREC
         super().__init__(cfg)
         self.GCE_loss = nn.CrossEntropyLoss()
         self.clean_rate = []
@@ -149,7 +155,11 @@ class NLPrompt(TrainerX):
         cfg = self.cfg
         classnames = self.dm.dataset.classnames
         clip_model = load_clip_to_cpu(cfg)
-        if cfg.TRAINER.NLPROMPT.PREC in ["fp32", "amp"]: clip_model.float()
+        if self.device.type != "cuda":
+            clip_model.float()
+            self.prec = "fp32"
+        elif self.prec in ["fp32", "amp"]:
+            clip_model.float()
         
         print("Building Custom CLIP with Fine-grained CoT Reasoning")
         self.model = CustomCLIP(cfg, classnames, clip_model)
@@ -160,11 +170,11 @@ class NLPrompt(TrainerX):
         self.optim = build_optimizer(self.model.prompt_learner, cfg.OPTIM)
         self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)
         self.register_model("prompt_learner", self.model.prompt_learner, self.optim, self.sched)
-        self.scaler = GradScaler() if cfg.TRAINER.NLPROMPT.PREC == "amp" else None
+        self.scaler = GradScaler() if (self.prec == "amp" and self.device.type == "cuda") else None
 
     def forward_backward_ce(self, batch):
         image, label, _ = self.parse_batch_train(batch)
-        if self.cfg.TRAINER.NLPROMPT.PREC == "amp":
+        if self.prec == "amp" and self.device.type == "cuda":
             with autocast():
                 output = self.model(image)
                 loss = F.cross_entropy(output, label)
@@ -222,19 +232,60 @@ class NLPrompt(TrainerX):
     def run_epoch(self):
         self.set_model_mode("train")
         losses_x, losses_u = MetricMeter(), MetricMeter()
+        batch_time, data_time = AverageMeter(), AverageMeter()
+
+        end = time.time()
         if self.train_loader_x:
             iter_x = iter(self.train_loader_x)
             for self.batch_idx in range(len(self.train_loader_x)):
+                data_time.update(time.time() - end)
                 losses_x.update(self.forward_backward_ce(next(iter_x)))
+                batch_time.update(time.time() - end)
+
+                meet_freq = (self.batch_idx + 1) % self.cfg.TRAIN.PRINT_FREQ == 0
+                only_few_batches = len(self.train_loader_x) < self.cfg.TRAIN.PRINT_FREQ
+                if meet_freq or only_few_batches:
+                    nb_remain = 0
+                    nb_remain += len(self.train_loader_x) - self.batch_idx - 1
+                    nb_remain += (self.max_epoch - self.epoch - 1) * len(self.train_loader_x)
+                    eta_seconds = batch_time.avg * nb_remain
+                    eta = str(datetime.timedelta(seconds=int(eta_seconds)))
+
+                    info = []
+                    info += [f"epoch [{self.epoch + 1}/{self.max_epoch}]"]
+                    info += [f"batch [{self.batch_idx + 1}/{len(self.train_loader_x)}]"]
+                    info += [f"time {batch_time.val:.3f} ({batch_time.avg:.3f})"]
+                    info += [f"data {data_time.val:.3f} ({data_time.avg:.3f})"]
+                    info += [f"eta {eta}"]
+                    info += [f"{losses_x}"]
+                    print(" ".join(info))
+
+                end = time.time()
+
         if self.train_loader_u:
             iter_u = iter(self.train_loader_u)
             for self.batch_idx in range(len(self.train_loader_u)):
                 losses_u.update(self.forward_backward_mae(next(iter_u)))
         self.update_lr()
+        print(f"epoch [{self.epoch + 1}/{self.max_epoch}] train_x {losses_x}")
+        if self.train_loader_u:
+            print(f"epoch [{self.epoch + 1}/{self.max_epoch}] train_u {losses_u}")
 
     def after_epoch(self):
-        if not self.cfg.TEST.NO_TEST and self.test(split="val") > self.best_result:
-            self.best_result = self.test(split="val")
-            self.save_model(self.epoch, self.output_dir, model_name="model-best.pth.tar")
+        last_epoch = (self.epoch + 1) == self.max_epoch
+        do_test = not self.cfg.TEST.NO_TEST
+        meet_checkpoint_freq = (
+            (self.epoch + 1) % self.cfg.TRAIN.CHECKPOINT_FREQ == 0
+            if self.cfg.TRAIN.CHECKPOINT_FREQ > 0 else False
+        )
+
+        if do_test and self.cfg.TEST.FINAL_MODEL == "best_val":
+            curr_result = self.test(split="val")
+            if curr_result > self.best_result:
+                self.best_result = curr_result
+                self.save_model(self.epoch, self.output_dir, model_name="model-best.pth.tar")
+
+        if meet_checkpoint_freq or last_epoch:
+            self.save_model(self.epoch, self.output_dir)
         if self.cfg.DATASET.USE_OT:
             self.train_loader_x = copy.deepcopy(self.tmp_train_loader_x)

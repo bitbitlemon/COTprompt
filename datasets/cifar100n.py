@@ -1,32 +1,115 @@
 import os
-import urllib.request
 import numpy as np
 import torch
 from torchvision.datasets import CIFAR100
 
 from dassl.data.datasets import DATASET_REGISTRY, Datum, DatasetBase
-from dassl.utils import mkdir_if_missing, check_isfile
-
-try:
-    # helper to prepare cifar10/cifar100 images into folders
-    from Dassl.pytorch.datasets.ssl.cifar10_cifar100_svhn import download_and_prepare
-except Exception:
-    download_and_prepare = None
 
 
-def _download_with_fallback(urls, dst):
-    last_err = None
-    for url in urls:
-        try:
-            print(f"Downloading {url} -> {dst}")
-            urllib.request.urlretrieve(url, dst)
-            return True
-        except Exception as e:
-            last_err = e
+def _get_classnames(root):
+    try:
+        tv_train = CIFAR100(root, train=True, download=False)
+        if hasattr(tv_train, "classes") and len(tv_train.classes) == 100:
+            return list(tv_train.classes)
+    except Exception:
+        pass
+    return [str(i) for i in range(100)]
+
+
+def _scan_indexed_images(base_dir):
+    if not os.path.isdir(base_dir):
+        raise RuntimeError(f"Missing directory: {base_dir}")
+
+    index_to_path = {}
+    index_to_label = {}
+    for cls_name in sorted(os.listdir(base_dir)):
+        cls_dir = os.path.join(base_dir, cls_name)
+        if not os.path.isdir(cls_dir):
             continue
-    if os.path.exists(dst):
-        return True
-    raise RuntimeError(f"Failed to download {os.path.basename(dst)}: {last_err}")
+        try:
+            label = int(cls_name)
+        except Exception:
+            continue
+
+        for fname in os.listdir(cls_dir):
+            lower = fname.lower()
+            if not (lower.endswith(".jpg") or lower.endswith(".jpeg") or lower.endswith(".png")):
+                continue
+            stem, _ = os.path.splitext(fname)
+            if not stem.isdigit():
+                continue
+            idx = int(stem) - 1
+            impath = os.path.join(cls_dir, fname)
+            index_to_path[idx] = impath
+            index_to_label[idx] = label
+
+    if not index_to_path:
+        raise RuntimeError(f"No indexed images found under: {base_dir}")
+
+    max_idx = max(index_to_path.keys())
+    num = max_idx + 1
+    paths = [None] * num
+    labels = np.empty((num,), dtype=np.int64)
+
+    missing = []
+    for i in range(num):
+        p = index_to_path.get(i)
+        if p is None:
+            missing.append(i)
+            continue
+        paths[i] = p
+        labels[i] = int(index_to_label[i])
+
+    if missing:
+        show = ", ".join(str(x) for x in missing[:20])
+        more = "" if len(missing) <= 20 else f" ... (+{len(missing) - 20})"
+        raise RuntimeError(
+            "Missing indexed images under {} at indices: {}{}".format(base_dir, show, more)
+        )
+
+    return paths, labels
+
+
+def _load_noisy_labels(labels_dir):
+    noisy_pt = os.path.join(labels_dir, "CIFAR-100_human.pt")
+    ordered_np = os.path.join(labels_dir, "CIFAR-100_human_ordered.npy")
+    order_map_np = os.path.join(labels_dir, "image_order_c100.npy")
+
+    clean_label = None
+    noisy_label = None
+
+    if os.path.exists(noisy_pt):
+        try:
+            try:
+                noise_file = torch.load(noisy_pt, map_location="cpu", weights_only=False)
+            except TypeError:
+                noise_file = torch.load(noisy_pt, map_location="cpu")
+            clean_label = noise_file.get("clean_label", noise_file.get("clean100", None))
+            noisy_label = noise_file.get("noisy_label", noise_file.get("noisy100", None))
+        except Exception:
+            clean_label = None
+            noisy_label = None
+
+    if clean_label is None or noisy_label is None:
+        if not (os.path.exists(ordered_np) and os.path.exists(order_map_np)):
+            missing = []
+            if not os.path.exists(noisy_pt):
+                missing.append(noisy_pt)
+            if not os.path.exists(ordered_np):
+                missing.append(ordered_np)
+            if not os.path.exists(order_map_np):
+                missing.append(order_map_np)
+            raise RuntimeError("Missing CIFAR-100N label files: " + ", ".join(missing))
+
+        ordered = np.load(ordered_np, allow_pickle=True).item()
+        order_map = np.load(order_map_np)
+        inv_map = np.zeros_like(order_map)
+        inv_map[order_map] = np.arange(order_map.shape[0])
+        clean_label = np.array(ordered.get("clean_label"))[inv_map]
+        noisy_label = np.array(ordered.get("noise_label"))[inv_map]
+        return clean_label.astype(np.int64), noisy_label.astype(np.int64)
+
+    return np.asarray(clean_label, dtype=np.int64), np.asarray(noisy_label, dtype=np.int64)
 
 
 @DATASET_REGISTRY.register()
@@ -36,125 +119,62 @@ class CIFAR100N(DatasetBase):
     def __init__(self, cfg):
         root = os.path.abspath(os.path.expanduser(cfg.DATASET.ROOT))
         self.dataset_dir = os.path.join(root, self.dataset_dir)
+        if not os.path.isdir(self.dataset_dir):
+            alt = os.path.join(root, "cifar100n")
+            if os.path.isdir(alt):
+                self.dataset_dir = alt
 
-        # image folders prepared by helper script
         self.image_train_dir = os.path.join(root, "cifar100", "train")
         self.image_test_dir = os.path.join(root, "cifar100", "test")
 
-        # ensure images exist; create from torchvision if missing
-        need_prepare = (not os.path.isdir(self.image_train_dir)) or (not os.path.isdir(self.image_test_dir))
-        if need_prepare and download_and_prepare is not None:
-            mkdir_if_missing(root)
-            print(f"Preparing CIFAR-100 images under {os.path.join(root,'cifar100')}")
-            download_and_prepare("cifar100", root)
+        train_paths, train_clean = _scan_indexed_images(self.image_train_dir)
+        test_paths, test_clean = _scan_indexed_images(self.image_test_dir)
+        classnames = _get_classnames(root)
 
-        # load torchvision datasets to access labels and class names
-        tv_train = CIFAR100(root, train=True, download=True)
-        tv_test = CIFAR100(root, train=False, download=True)
-        classnames = tv_train.classes  # 100 fine-grained class names
-
-        # ensure CIFAR-100N noisy label file is present
-        labels_dir = os.path.join(self.dataset_dir, "data")
-        mkdir_if_missing(labels_dir)
-        noisy_pt = os.path.join(labels_dir, "CIFAR-100_human.pt")
-        if not os.path.exists(noisy_pt):
-            urls = [
-                "https://mirrors.tuna.tsinghua.edu.cn/github-raw/UCSC-REAL/cifar-10-100n/master/data/CIFAR-100_human.pt",
-                "https://raw.githubusercontent.com/UCSC-REAL/cifar-10-100n/master/data/CIFAR-100_human.pt",
-            ]
-            last_err = None
-            for url in urls:
-                print(f"Downloading CIFAR-100N labels from {url} to {noisy_pt}")
-                try:
-                    urllib.request.urlretrieve(url, noisy_pt)
-                    last_err = None
-                    break
-                except Exception as e:
-                    last_err = e
-                    continue
-            if last_err is not None:
-                raise RuntimeError(f"Failed to download CIFAR-100N label file: {last_err}")
-
-        clean_label = None
+        use_noisy = bool(getattr(cfg.DATASET, "NOISE_LABEL", True))
         noisy_label = None
-        if os.path.exists(noisy_pt):
-            try:
-                try:
-                    noise_file = torch.load(noisy_pt, map_location="cpu", weights_only=False)
-                except TypeError:
-                    noise_file = torch.load(noisy_pt, map_location="cpu")
-                clean_label = noise_file.get("clean_label", noise_file.get("clean100", None))
-                noisy_label = noise_file.get("noisy_label", noise_file.get("noisy100", None))
-            except Exception:
-                clean_label = None
-                noisy_label = None
-        if clean_label is None or noisy_label is None:
-            # Fallback: use TFDS-ordered numpy labels + image order mapping
-            ordered_np = os.path.join(labels_dir, "CIFAR-100_human_ordered.npy")
-            order_map_np = os.path.join(labels_dir, "image_order_c100.npy")
-            if not os.path.exists(ordered_np):
-                _download_with_fallback(
-                    [
-                        "https://mirrors.tuna.tsinghua.edu.cn/github-raw/UCSC-REAL/cifar-10-100n/master/data/CIFAR-100_human_ordered.npy",
-                        "https://raw.githubusercontent.com/UCSC-REAL/cifar-10-100n/master/data/CIFAR-100_human_ordered.npy",
-                    ],
-                    ordered_np,
-                )
-            if not os.path.exists(order_map_np):
-                _download_with_fallback(
-                    [
-                        "https://mirrors.tuna.tsinghua.edu.cn/github-raw/UCSC-REAL/cifar-10-100n/master/data/image_order_c100.npy",
-                        "https://raw.githubusercontent.com/UCSC-REAL/cifar-10-100n/master/data/image_order_c100.npy",
-                    ],
-                    order_map_np,
-                )
-            if not os.path.exists(ordered_np) or not os.path.exists(order_map_np):
-                missing = []
-                if not os.path.exists(ordered_np):
-                    missing.append(ordered_np)
-                if not os.path.exists(order_map_np):
-                    missing.append(order_map_np)
-                raise RuntimeError(
-                    "Missing CIFAR-100N label files: "
-                    + ", ".join(missing)
-                    + ". If the server cannot access the internet, download these files locally and copy them to the same path on the server."
-                )
-            ordered = np.load(ordered_np, allow_pickle=True).item()
-            order_map = np.load(order_map_np)
-            inv_map = np.zeros_like(order_map)
-            inv_map[order_map] = np.arange(order_map.shape[0])
-            clean_label = np.array(ordered.get("clean_label"))
-            noisy_label = np.array(ordered.get("noise_label"))
-            clean_label = clean_label[inv_map]
-            noisy_label = noisy_label[inv_map]
+        clean_label = train_clean
+        labels_dir = os.path.join(self.dataset_dir, "data")
 
-        # build train items following torchvision order
+        if use_noisy:
+            clean_label, noisy_label = _load_noisy_labels(labels_dir)
+            if clean_label.shape[0] != train_clean.shape[0]:
+                raise RuntimeError(
+                    "Label length mismatch: {} vs {}".format(clean_label.shape[0], train_clean.shape[0])
+                )
+
+            match_ratio = float(np.mean(clean_label.astype(train_clean.dtype) == train_clean))
+            if match_ratio < 0.9:
+                ordered_np = os.path.join(labels_dir, "CIFAR-100_human_ordered.npy")
+                order_map_np = os.path.join(labels_dir, "image_order_c100.npy")
+                if not (os.path.exists(ordered_np) and os.path.exists(order_map_np)):
+                    raise RuntimeError(
+                        "Label/image order mismatch and missing reorder files: {}, {}".format(
+                            ordered_np, order_map_np
+                        )
+                    )
+                ordered = np.load(ordered_np, allow_pickle=True).item()
+                order_map = np.load(order_map_np)
+                inv_map = np.zeros_like(order_map)
+                inv_map[order_map] = np.arange(order_map.shape[0])
+                clean_label = np.array(ordered.get("clean_label"))[inv_map].astype(np.int64)
+                noisy_label = np.array(ordered.get("noise_label"))[inv_map].astype(np.int64)
+
         train = []
-        for i in range(len(tv_train)):
-            true_lab = int(tv_train.targets[i])
-            cname = classnames[int(noisy_label[i])]
-            impath = os.path.join(self.image_train_dir, str(true_lab).zfill(3), str(i + 1).zfill(5) + ".jpg")
-            if not check_isfile(impath):
-                # if images were not extracted to files, save on-the-fly
-                img, _ = tv_train[i]
-                mkdir_if_missing(os.path.dirname(impath))
-                img.save(impath)
-            item = Datum(impath=impath, label=int(noisy_label[i]), classname=cname)
-            item.gttarget = int(clean_label[i])
-            item.target = int(noisy_label[i])
+        for i, impath in enumerate(train_paths):
+            gt = int(train_clean[i])
+            lab = int(noisy_label[i]) if use_noisy else gt
+            cname = classnames[lab] if 0 <= lab < len(classnames) else str(lab)
+            item = Datum(impath=impath, label=lab, classname=cname)
+            item.gttarget = gt
+            item.target = int(noisy_label[i]) if use_noisy else lab
             train.append(item)
 
-        # build test items with clean labels
         test = []
-        for i in range(len(tv_test)):
-            true_lab = int(tv_test.targets[i])
-            cname = classnames[true_lab]
-            impath = os.path.join(self.image_test_dir, str(true_lab).zfill(3), str(i + 1).zfill(5) + ".jpg")
-            if not check_isfile(impath):
-                img, _ = tv_test[i]
-                mkdir_if_missing(os.path.dirname(impath))
-                img.save(impath)
-            item = Datum(impath=impath, label=true_lab, classname=cname)
+        for i, impath in enumerate(test_paths):
+            gt = int(test_clean[i])
+            cname = classnames[gt] if 0 <= gt < len(classnames) else str(gt)
+            item = Datum(impath=impath, label=gt, classname=cname)
             test.append(item)
 
         # optional few-shot sampling

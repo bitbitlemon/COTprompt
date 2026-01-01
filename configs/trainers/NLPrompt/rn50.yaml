@@ -14,7 +14,8 @@ INPUT:
 
 OPTIM:
   NAME: "sgd"
-  LR: 0.002
+  LR: 0.01
+  WEIGHT_DECAY: 0.0
   MAX_EPOCH: 100     # [建议] 200 有点久，对于 CLIP 微调，通常 50-100 个 Epoch 足以收敛。
   LR_SCHEDULER: "cosine"
   WARMUP_EPOCH: 1
@@ -35,3 +36,4 @@ TRAINER:
     CSC: False
     CLASS_TOKEN_POSITION: "end"
     PREC: "amp"      # 混合精度训练，保持开启以节省显存
+    PROMPT_STYLE: "coop"

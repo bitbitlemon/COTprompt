@@ -12,29 +12,7 @@ from dassl.utils import setup_logger, set_random_seed, collect_env_info
 from dassl.config import get_cfg_default
 from dassl.engine import build_trainer
 
-# custom
-import datasets.oxford_pets
-import datasets.oxford_flowers
-import datasets.fgvc_aircraft
-import datasets.dtd
-import datasets.eurosat
-import datasets.stanford_cars
-import datasets.food101
-import datasets.sun397
-import datasets.caltech101
-import datasets.ucf101
-import datasets.imagenet
-
-import datasets.food101n
-
-import datasets.cifar100n
-
-import datasets.imagenet_sketch
-import datasets.imagenetv2
-import datasets.imagenet_a
-import datasets.imagenet_r
-
-import trainers.nlprompt
+from datasets import cifar100n
 
 
 def print_args(args, cfg):
@@ -67,6 +45,57 @@ def _merge_cfg_from_file(cfg, file_path):
     raise last_err
 
 
+def extend_cfg(cfg):
+    cfg.DATASET.NOISE_LABEL = True
+    cfg.DATASET.NOISE_RATE = 0.0
+    cfg.DATASET.NOISE_TYPE = "sym"
+    cfg.DATASET.num_class = 100
+
+    cfg.DATASET.USE_OT = False
+    cfg.DATASET.REG_FEAT = 1.0
+    cfg.DATASET.REG_LAB = 1.0
+    cfg.DATASET.CURRICLUM_EPOCH = 0
+    cfg.DATASET.BEGIN_RATE = 0.3
+    cfg.DATASET.CURRICLUM_MODE = "linear"
+    cfg.DATASET.PMODE = "logP"
+    cfg.DATASET.REG_E = 0.01
+
+
+def set_baseline_defaults(cfg):
+    cfg.OUTPUT_DIR = "output/cifar100n_vanilla"
+
+    cfg.TRAINER.NAME = "Vanilla"
+
+    cfg.DATASET.NAME = "CIFAR100N"
+    cfg.DATASET.NUM_SHOTS = -1
+    cfg.DATASET.NOISE_LABEL = False
+
+    cfg.INPUT.SIZE = (32, 32)
+    cfg.INPUT.TRANSFORMS = ("random_flip", "random_crop", "normalize")
+    cfg.INPUT.PIXEL_MEAN = [0.5, 0.5, 0.5]
+    cfg.INPUT.PIXEL_STD = [0.5, 0.5, 0.5]
+    cfg.INPUT.CROP_PADDING = 4
+
+    cfg.DATALOADER.TRAIN_X.BATCH_SIZE = 128
+    cfg.DATALOADER.TEST.BATCH_SIZE = 256
+
+    cfg.MODEL.BACKBONE.NAME = "wide_resnet_28_2"
+    cfg.MODEL.BACKBONE.PRETRAINED = False
+    cfg.MODEL.HEAD.NAME = ""
+
+    cfg.OPTIM.NAME = "sgd"
+    cfg.OPTIM.LR = 0.1
+    cfg.OPTIM.WEIGHT_DECAY = 5e-4
+    cfg.OPTIM.MOMENTUM = 0.9
+    cfg.OPTIM.MAX_EPOCH = 200
+    cfg.OPTIM.LR_SCHEDULER = "cosine"
+
+    cfg.TRAIN.PRINT_FREQ = 50
+    cfg.TRAIN.CHECKPOINT_FREQ = 10
+    cfg.TEST.NO_TEST = False
+    cfg.TEST.FINAL_MODEL = "last_step"
+
+
 def reset_cfg(cfg, args):
     if args.root:
         cfg.DATASET.ROOT = args.root
@@ -77,14 +106,8 @@ def reset_cfg(cfg, args):
     if args.resume:
         cfg.RESUME = args.resume
 
-    if args.seed:
+    if args.seed is not None:
         cfg.SEED = args.seed
-
-    if args.source_domains:
-        cfg.DATASET.SOURCE_DOMAINS = args.source_domains
-
-    if args.target_domains:
-        cfg.DATASET.TARGET_DOMAINS = args.target_domains
 
     if args.transforms:
         cfg.INPUT.TRANSFORMS = args.transforms
@@ -95,70 +118,21 @@ def reset_cfg(cfg, args):
     if args.backbone:
         cfg.MODEL.BACKBONE.NAME = args.backbone
 
-    if args.head:
-        cfg.MODEL.HEAD.NAME = args.head
-
-
-def extend_cfg(cfg):
-    """
-    Add new config variables.
-
-    E.g.
-        from yacs.config import CfgNode as CN
-        cfg.TRAINER.MY_MODEL = CN()
-        cfg.TRAINER.MY_MODEL.PARAM_A = 1.
-        cfg.TRAINER.MY_MODEL.PARAM_B = 0.5
-        cfg.TRAINER.MY_MODEL.PARAM_C = False
-    """
-    from yacs.config import CfgNode as CN
-
-    cfg.TRAINER.NLPROMPT = CN()
-    cfg.TRAINER.NLPROMPT.N_CTX = 16  # number of context vectors
-    cfg.TRAINER.NLPROMPT.CSC = False  # class-specific context
-    cfg.TRAINER.NLPROMPT.CTX_INIT = ""  # initialization words
-    cfg.TRAINER.NLPROMPT.PREC = "fp16"  # fp16, fp32, amp
-    cfg.TRAINER.NLPROMPT.CLASS_TOKEN_POSITION = "end"  # 'middle' or 'end' or 'front'
-    cfg.TRAINER.NLPROMPT.PROMPT_STYLE = "coop"
-    cfg.DATASET.SUBSAMPLE_CLASSES = "all"
-
-    cfg.DATASET.NUM_SHOTS = 16
-    # Config for noise 
-    cfg.DATASET.NOISE_LABEL = True
-    cfg.DATASET.NOISE_RATE = 0.5
-    cfg.DATASET.NOISE_TYPE = 'sym'
-    cfg.DATASET.num_class = 100
-
-    #config for ot
-    cfg.DATASET.USE_OT = True
-    cfg.DATASET.REG_FEAT = 1.0
-    cfg.DATASET.REG_LAB = 1.0
-    cfg.DATASET.CURRICLUM_EPOCH = 0
-    cfg.DATASET.BEGIN_RATE = 0.3
-    cfg.DATASET.CURRICLUM_MODE = 'linear'
-    cfg.DATASET.PMODE = 'logP'
-    cfg.DATASET.REG_E = 0.01
-
 
 def setup_cfg(args):
     cfg = get_cfg_default()
     extend_cfg(cfg)
+    set_baseline_defaults(cfg)
 
-    # 1. From the dataset config file
     if args.dataset_config_file:
         _merge_cfg_from_file(cfg, args.dataset_config_file)
 
-    # 2. From the method config file
     if args.config_file:
         _merge_cfg_from_file(cfg, args.config_file)
 
-    # 3. From input arguments
     reset_cfg(cfg, args)
-
-    # 4. From optional input arguments
     cfg.merge_from_list(args.opts)
-
     cfg.freeze()
-
     return cfg
 
 
@@ -176,6 +150,7 @@ def main(args):
     print("Collecting env info ...")
     print("** System info **\n{}\n".format(collect_env_info()))
 
+    assert cifar100n is not None
     trainer = build_trainer(cfg)
 
     if args.eval_only:
@@ -189,8 +164,18 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=str, default=os.path.join(repo_dir, "datasets", "DATA"), help="path to dataset")
-    parser.add_argument("--output-dir", type=str, default="output/caltech101_sym0.5_16shot", help="output directory")
+    parser.add_argument(
+        "--root",
+        type=str,
+        default=os.path.join(repo_dir, "datasets", "DATA"),
+        help="path to dataset",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="output/cifar100n_vanilla",
+        help="output directory",
+    )
     parser.add_argument(
         "--resume",
         type=str,
@@ -198,29 +183,32 @@ if __name__ == "__main__":
         help="checkpoint directory (from which the training resumes)",
     )
     parser.add_argument(
-        "--seed", type=int, default=1, help="only positive value enables a fixed seed"
-    )
-    parser.add_argument(
-        "--source-domains", type=str, nargs="+", help="source domains for DA/DG"
-    )
-    parser.add_argument(
-        "--target-domains", type=str, nargs="+", help="target domains for DA/DG"
+        "--seed",
+        type=int,
+        default=1,
+        help="only positive value enables a fixed seed",
     )
     parser.add_argument(
         "--transforms", type=str, nargs="+", help="data augmentation methods"
     )
     parser.add_argument(
-        "--config-file", type=str, default="configs/trainers/NLPrompt/vit_b16_ep100.yaml", help="path to config file"
+        "--config-file",
+        type=str,
+        default="",
+        help="path to config file (optional)",
     )
     parser.add_argument(
         "--dataset-config-file",
         type=str,
-        default="configs/datasets/caltech101.yaml",
+        default=os.path.join("configs", "datasets", "cifar100n.yaml"),
         help="path to config file for dataset setup",
     )
-    parser.add_argument("--trainer", type=str, default="NLPrompt", help="name of trainer")
-    parser.add_argument("--backbone", type=str, default="", help="name of CNN backbone")
-    parser.add_argument("--head", type=str, default="", help="name of head")
+    parser.add_argument(
+        "--trainer", type=str, default="Vanilla", help="name of trainer"
+    )
+    parser.add_argument(
+        "--backbone", type=str, default="wide_resnet_28_2", help="name of backbone"
+    )
     parser.add_argument("--eval-only", action="store_true", help="evaluation only")
     parser.add_argument(
         "--model-dir",
@@ -229,7 +217,10 @@ if __name__ == "__main__":
         help="load model from this directory for eval-only mode",
     )
     parser.add_argument(
-        "--load-epoch", type=int, help="load model weights at this epoch for evaluation"
+        "--load-epoch",
+        type=int,
+        default=None,
+        help="load model weights at this epoch for evaluation",
     )
     parser.add_argument(
         "--no-train", action="store_true", help="do not call trainer.train()"
@@ -240,5 +231,4 @@ if __name__ == "__main__":
         nargs=argparse.REMAINDER,
         help="modify config options using the command-line",
     )
-    args = parser.parse_args()
-    main(args)
+    main(parser.parse_args())
