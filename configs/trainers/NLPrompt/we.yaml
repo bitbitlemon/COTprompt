@@ -4,7 +4,6 @@ DATALOADER:
   TEST:
     BATCH_SIZE: 512        # 测试可更大
   NUM_WORKERS: 8
-  PIN_MEMORY: True
 
 INPUT:
   SIZE: (224, 224)         # 必须保持CLIP输入尺度
@@ -15,9 +14,8 @@ INPUT:
   # CIFAR-100N：更推荐“保守增广”，避免RRC把主体裁掉（32x32很脆）
   # 如果你的框架支持下列transform名，优先用这一套
   TRANSFORMS:
-    - "random_crop"         # 先在32x32尺度做random crop + padding（更符合CIFAR习惯）
+    - "random_resized_crop"
     - "random_flip"
-    - "resize"              # 再resize到224给CLIP
     - "normalize"
 
   # 如果你的代码不支持 random_crop/resize 这类名称，
@@ -40,11 +38,6 @@ OPTIM:
 TRAIN:
   PRINT_FREQ: 20
   CHECKPOINT_FREQ: 10
-  SEED: 1
-
-  # 噪声集更建议保存best（如果框架支持）
-  SAVE_BEST: True
-  METRIC: "accuracy"
 
 MODEL:
   BACKBONE:
