@@ -56,10 +56,10 @@ TRAINER:
     # FREEZE_BACKBONE: True
 
 # ============（可选项：如果你的代码里有OT/噪声相关开关）============
-# DATASET:
-#   USE_OT: True             # 如果你确实实现了OT对齐，再打开
-#   NUM_SHOTS: -1
-#
-# LOSS:
-#   LABEL_SMOOTHING: 0.1     # 若框架支持，噪声标注常用（没有就忽略）
+DATASET:
+  USE_OT: True             # 如果你确实实现了OT对齐，再打开
+  NUM_SHOTS: -1
+
+LOSS:
+  LABEL_SMOOTHING: 0.1     # 若框架支持，噪声标注常用（没有就忽略）
 # ====================================================================
