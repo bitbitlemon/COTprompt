@@ -22,7 +22,35 @@ if dassl_dir not in sys.path:
 
 from dassl.modeling import build_backbone
 
-from datasets.cifar100n import _load_noisy_labels, _scan_indexed_images
+from datasets.cifar100n import _load_noisy_labels, _scan_indexed_images, _get_classnames
+
+from trainers.nlprompt import load_clip_to_cpu, CustomCLIP
+
+
+class _CfgNode:
+    pass
+
+
+class NLPromptCfg:
+    def __init__(
+        self,
+        backbone_name: str,
+        n_ctx: int = 16,
+        ctx_init: str = "",
+        prec: str = "fp32",
+        class_token_position: str = "end",
+        prompt_style: str = "coop",
+    ):
+        self.MODEL = _CfgNode()
+        self.MODEL.BACKBONE = _CfgNode()
+        self.MODEL.BACKBONE.NAME = backbone_name
+        self.TRAINER = _CfgNode()
+        self.TRAINER.NLPROMPT = _CfgNode()
+        self.TRAINER.NLPROMPT.N_CTX = n_ctx
+        self.TRAINER.NLPROMPT.CTX_INIT = ctx_init
+        self.TRAINER.NLPROMPT.PREC = prec
+        self.TRAINER.NLPROMPT.CLASS_TOKEN_POSITION = class_token_position
+        self.TRAINER.NLPROMPT.PROMPT_STYLE = prompt_style
 
 
 def set_seed(seed: int):
@@ -122,6 +150,22 @@ class ClsNet(nn.Module):
     def forward(self, x):
         f = self.backbone(x)
         return self.classifier(f)
+
+
+class NLPromptNet(nn.Module):
+    def __init__(self, backbone_name: str, classnames, device: torch.device):
+        super().__init__()
+        cfg = NLPromptCfg(backbone_name=backbone_name)
+        clip_model = load_clip_to_cpu(cfg)
+        if device.type != "cuda":
+            clip_model.float()
+        self.model = CustomCLIP(cfg, classnames, clip_model)
+        for name, param in self.model.named_parameters():
+            if "prompt_learner" not in name:
+                param.requires_grad_(False)
+
+    def forward(self, x):
+        return self.model(x)
 
 
 @dataclass
@@ -316,6 +360,12 @@ def parse_args():
     p.add_argument("--output-dir", type=str, default=os.path.join(repo_dir, "output", "cifar100n_dividemix"))
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--backbone", type=str, default="wide_resnet_28_2")
+    p.add_argument(
+        "--arch-type",
+        type=str,
+        default="backbone",
+        choices=["backbone", "nlprompt"],
+    )
     p.add_argument("--epochs", type=int, default=200)
     p.add_argument("--warmup-epochs", type=int, default=10)
     p.add_argument("--batch-size", type=int, default=64)
@@ -357,23 +407,41 @@ def main():
     test_paths, test_labels = _scan_indexed_images(test_dir)
     _, noisy_labels = _load_noisy_labels(labels_dir)
     num_classes = 100
-
-    mean = [0.5071, 0.4867, 0.4408]
-    std = [0.2675, 0.2565, 0.2761]
-    transform_train = transforms.Compose(
-        [
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=mean, std=std),
-        ]
-    )
-    transform_test = transforms.Compose(
-        [
-            transforms.ToTensor(),
-            transforms.Normalize(mean=mean, std=std),
-        ]
-    )
+    if args.arch_type == "nlprompt":
+        clip_mean = [0.48145466, 0.4578275, 0.40821073]
+        clip_std = [0.26862954, 0.26130258, 0.27577711]
+        transform_train = transforms.Compose(
+            [
+                transforms.RandomResizedCrop(224, interpolation=Image.BICUBIC),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=clip_mean, std=clip_std),
+            ]
+        )
+        transform_test = transforms.Compose(
+            [
+                transforms.Resize(224, interpolation=Image.BICUBIC),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=clip_mean, std=clip_std),
+            ]
+        )
+    else:
+        mean = [0.5071, 0.4867, 0.4408]
+        std = [0.2675, 0.2565, 0.2761]
+        transform_train = transforms.Compose(
+            [
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=mean, std=std),
+            ]
+        )
+        transform_test = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Normalize(mean=mean, std=std),
+            ]
+        )
 
     train_ds_all = Cifar100NTrain(train_paths, noisy_labels, transform_train)
     train_loader_warm = DataLoader(
@@ -401,8 +469,13 @@ def main():
         drop_last=False,
     )
 
-    model1 = ClsNet(args.backbone, num_classes).to(device)
-    model2 = ClsNet(args.backbone, num_classes).to(device)
+    if args.arch_type == "nlprompt":
+        classnames = _get_classnames(data_root)
+        model1 = NLPromptNet(args.backbone, classnames, device).to(device)
+        model2 = NLPromptNet(args.backbone, classnames, device).to(device)
+    else:
+        model1 = ClsNet(args.backbone, num_classes).to(device)
+        model2 = ClsNet(args.backbone, num_classes).to(device)
 
     opt1 = torch.optim.SGD(model1.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     opt2 = torch.optim.SGD(model2.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
