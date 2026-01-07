@@ -3,10 +3,14 @@ python train.py \
   --trainer NLPrompt \
   --dataset-config-file configs/datasets/cifar100n.yaml \
   --config-file configs/trainers/NLPrompt/rn50.yaml \
-  --output-dir output/cifar100n_nlprompt_cleancheck_seed1 \
+  --output-dir output/cifar100n_nlprompt_clean_cifarcrop_resize224_seed1 \
   DATASET.NUM_SHOTS -1 \
   DATASET.NOISE_LABEL False \
   DATASET.USE_OT False \
-  OPTIM.MAX_EPOCH 50 \
+  INPUT.CROP_PADDING 4 \
+  INPUT.TRANSFORMS "('random_crop','random_flip','resize','normalize')" \
+  INPUT.SIZE "(224,224)" \
+  OPTIM.LR 0.005 \
+  OPTIM.MAX_EPOCH 100 \
   TRAIN.CHECKPOINT_FREQ 10 \
   TEST.NO_TEST False
