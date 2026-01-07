@@ -1,0 +1,281 @@
+***************
+** Arguments **
+***************
+backbone: 
+config_file: configs/trainers/NLPrompt/we.yaml
+dataset_config_file: configs/datasets/cifar100n.yaml
+eval_only: False
+head: 
+load_epoch: None
+model_dir: 
+no_train: True
+opts: []
+output_dir: output/_smoke_cifar100n_nlprompt_we_seed1
+resume: 
+root: E:\COTprompt\datasets\DATA
+seed: 1
+source_domains: None
+target_domains: None
+trainer: NLPrompt
+transforms: None
+************
+** Config **
+************
+DATALOADER:
+  K_TRANSFORMS: 1
+  NUM_WORKERS: 8
+  RETURN_IMG0: False
+  TEST:
+    BATCH_SIZE: 512
+    SAMPLER: SequentialSampler
+  TRAIN_U:
+    BATCH_SIZE: 32
+    N_DOMAIN: 0
+    N_INS: 16
+    SAME_AS_X: True
+    SAMPLER: RandomSampler
+  TRAIN_X:
+    BATCH_SIZE: 256
+    N_DOMAIN: 0
+    N_INS: 16
+    SAMPLER: RandomSampler
+DATASET:
+  ALL_AS_UNLABELED: False
+  BEGIN_RATE: 0.3
+  CIFAR_C_LEVEL: 1
+  CIFAR_C_TYPE: 
+  CURRICLUM_EPOCH: 0
+  CURRICLUM_MODE: linear
+  NAME: CIFAR100N
+  NOISE_LABEL: False
+  NOISE_RATE: 0.5
+  NOISE_TYPE: sym
+  NUM_LABELED: -1
+  NUM_SHOTS: 16
+  PMODE: logP
+  REG_E: 0.01
+  REG_FEAT: 1.0
+  REG_LAB: 1.0
+  ROOT: E:\COTprompt\datasets\DATA
+  SOURCE_DOMAINS: ()
+  STL10_FOLD: -1
+  SUBSAMPLE_CLASSES: all
+  TARGET_DOMAINS: ()
+  USE_OT: True
+  VAL_PERCENT: 0.1
+  num_class: 100
+INPUT:
+  COLORJITTER_B: 0.4
+  COLORJITTER_C: 0.4
+  COLORJITTER_H: 0.1
+  COLORJITTER_S: 0.4
+  CROP_PADDING: 4
+  CUTOUT_LEN: 16
+  CUTOUT_N: 1
+  GB_K: 21
+  GB_P: 0.5
+  GN_MEAN: 0.0
+  GN_STD: 0.15
+  INTERPOLATION: bicubic
+  NO_TRANSFORM: False
+  PIXEL_MEAN: [0.48145466, 0.4578275, 0.40821073]
+  PIXEL_STD: [0.26862954, 0.26130258, 0.27577711]
+  RANDAUGMENT_M: 10
+  RANDAUGMENT_N: 2
+  RGS_P: 0.2
+  RRCROP_SCALE: (0.08, 1.0)
+  SIZE: (224, 224)
+  TRANSFORMS: ('random_resized_crop', 'random_flip', 'normalize')
+MODEL:
+  BACKBONE:
+    NAME: RN50
+    PRETRAINED: True
+  HEAD:
+    ACTIVATION: relu
+    BN: True
+    DROPOUT: 0.0
+    HIDDEN_LAYERS: ()
+    NAME: 
+  INIT_WEIGHTS: 
+OPTIM:
+  ADAM_BETA1: 0.9
+  ADAM_BETA2: 0.999
+  BASE_LR_MULT: 0.1
+  GAMMA: 0.1
+  LR: 0.005
+  LR_SCHEDULER: cosine
+  MAX_EPOCH: 50
+  MOMENTUM: 0.9
+  NAME: sgd
+  NEW_LAYERS: ()
+  RMSPROP_ALPHA: 0.99
+  SGD_DAMPNING: 0
+  SGD_NESTEROV: False
+  STAGED_LR: False
+  STEPSIZE: (-1,)
+  WARMUP_CONS_LR: 1e-05
+  WARMUP_EPOCH: 1
+  WARMUP_MIN_LR: 1e-05
+  WARMUP_RECOUNT: True
+  WARMUP_TYPE: constant
+  WEIGHT_DECAY: 0.0
+OUTPUT_DIR: output/_smoke_cifar100n_nlprompt_we_seed1
+RESUME: 
+SEED: 1
+TEST:
+  COMPUTE_CMAT: False
+  EVALUATOR: Classification
+  FINAL_MODEL: last_step
+  NO_TEST: False
+  PER_CLASS_RESULT: False
+  SPLIT: test
+TRAIN:
+  CHECKPOINT_FREQ: 10
+  COUNT_ITER: train_x
+  PRINT_FREQ: 20
+TRAINER:
+  CDAC:
+    CLASS_LR_MULTI: 10
+    P_THRESH: 0.95
+    RAMPUP_COEF: 30
+    RAMPUP_ITRS: 1000
+    STRONG_TRANSFORMS: ()
+    TOPK_MATCH: 5
+  CROSSGRAD:
+    ALPHA_D: 0.5
+    ALPHA_F: 0.5
+    EPS_D: 1.0
+    EPS_F: 1.0
+  DAEL:
+    CONF_THRE: 0.95
+    STRONG_TRANSFORMS: ()
+    WEIGHT_U: 0.5
+  DAELDG:
+    CONF_THRE: 0.95
+    STRONG_TRANSFORMS: ()
+    WEIGHT_U: 0.5
+  DDAIG:
+    ALPHA: 0.5
+    CLAMP: False
+    CLAMP_MAX: 1.0
+    CLAMP_MIN: -1.0
+    G_ARCH: 
+    LMDA: 0.3
+    WARMUP: 0
+  DOMAINMIX:
+    ALPHA: 1.0
+    BETA: 1.0
+    TYPE: crossdomain
+  ENTMIN:
+    LMDA: 0.001
+  FIXMATCH:
+    CONF_THRE: 0.95
+    STRONG_TRANSFORMS: ()
+    WEIGHT_U: 1.0
+  M3SDA:
+    LMDA: 0.5
+    N_STEP_F: 4
+  MCD:
+    N_STEP_F: 4
+  MEANTEACHER:
+    EMA_ALPHA: 0.999
+    RAMPUP: 5
+    WEIGHT_U: 1.0
+  MIXMATCH:
+    MIXUP_BETA: 0.75
+    RAMPUP: 20000
+    TEMP: 2.0
+    WEIGHT_U: 100.0
+  MME:
+    LMDA: 0.1
+  NAME: NLPrompt
+  NLPROMPT:
+    CLASS_TOKEN_POSITION: end
+    CSC: False
+    CTX_INIT: 
+    N_CTX: 16
+    PREC: amp
+    PROMPT_STYLE: coop
+  SE:
+    CONF_THRE: 0.95
+    EMA_ALPHA: 0.999
+    RAMPUP: 300
+USE_CUDA: True
+VERBOSE: True
+VERSION: 1
+Collecting env info ...
+** System info **
+PyTorch version: 2.8.0+cpu
+Is debug build: False
+CUDA used to build PyTorch: Could not collect
+ROCM used to build PyTorch: N/A
+
+OS: Microsoft Windows 11 家庭中文版 (10.0.26100 64 位)
+GCC version: Could not collect
+Clang version: Could not collect
+CMake version: Could not collect
+Libc version: N/A
+
+Python version: 3.9.5 (tags/v3.9.5:0a7dcbd, May  3 2021, 17:27:52) [MSC v.1928 64 bit (AMD64)] (64-bit runtime)
+Python platform: Windows-10-10.0.26100-SP0
+Is CUDA available: False
+CUDA runtime version: 12.6.20
+CUDA_MODULE_LOADING set to: N/A
+GPU models and configuration: GPU 0: NVIDIA GeForce RTX 3060 Laptop GPU
+Nvidia driver version: 581.32
+cuDNN version: Could not collect
+HIP runtime version: N/A
+MIOpen runtime version: N/A
+Is XNNPACK available: True
+
+CPU:
+Name: Intel(R) Core(TM) i7-10870H CPU @ 2.20GHz
+Manufacturer: GenuineIntel
+Family: 198
+Architecture: 9
+ProcessorType: 3
+DeviceID: CPU0
+CurrentClockSpeed: 2208
+MaxClockSpeed: 2208
+L2CacheSize: 2048
+L2CacheSpeed: None
+Revision: None
+
+Versions of relevant libraries:
+[pip3] flake8==7.3.0
+[pip3] numpy==1.23.5
+[pip3] onnxruntime==1.19.2
+[pip3] optree==0.17.0
+[pip3] pytorch-pretrained-bert==0.6.2
+[pip3] pytorch-tabnet==4.1.0
+[pip3] torch==2.8.0
+[pip3] torch-geometric==2.6.1
+[pip3] torch_scatter==2.1.2+pt28cpu
+[pip3] torchvision==0.23.0
+[conda] Could not collect
+        Pillow (10.4.0)
+
+Loading trainer: NLPrompt
+Loading dataset: CIFAR100N
+Creating a 16-shot dataset
+Building transform_train
++ random resized crop (size=(224, 224), scale=(0.08, 1.0))
++ random flip
++ to torch tensor of range [0, 1]
++ normalization (mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711])
+Building transform_test
++ resize the smaller edge to 224
++ 224x224 center crop
++ to torch tensor of range [0, 1]
++ normalization (mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711])
+Data loader size: 6
+Data loader size: 20
+---------  ---------
+Dataset    CIFAR100N
+# classes  100
+# train_x  1,600
+# test     10,000
+---------  ---------
+Building Custom CLIP with Fine-grained CoT Reasoning
+Initializing generic context for 100 classes
+Loading evaluator: Classification
