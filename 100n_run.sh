@@ -1,14 +1,1 @@
-python train.py \
-  --seed 1 \
-  --trainer NLPrompt \
-  --dataset-config-file configs/datasets/cifar100n.yaml \
-  --config-file configs/trainers/NLPrompt/rn50.yaml \
-  --output-dir output/cifar100n_nlprompt_clean_rrscale05_seed1 \
-  DATASET.NUM_SHOTS -1 \
-  DATASET.NOISE_LABEL False \
-  DATASET.USE_OT False \
-  INPUT.RRCROP_SCALE "(0.5, 1.0)" \
-  OPTIM.LR 0.005 \
-  OPTIM.MAX_EPOCH 100 \
-  TRAIN.CHECKPOINT_FREQ 10 \
-  TEST.NO_TEST False
+python .\train.py --seed 1 --trainer NLPrompt --dataset-config-file configs/datasets/cifar100n.yaml --config-file configs/trainers/NLPrompt/rn50.yaml --output-dir output/cifar100n_hybrid_dynsel_seed1 DATASET.NUM_SHOTS 16 DATASET.NOISE_LABEL True TRAINER.NLPROMPT.PROMPT_STYLE cot TRAINER.NLPROMPT.USE_FIXED_PROMPT True TRAINER.NLPROMPT.USE_HYBRID True TRAINER.NLPROMPT.HYBRID_ALPHA 0.5 TRAINER.NLPROMPT.DYN_SEL True TRAINER.NLPROMPT.DYN_SEL_FREQ 2 TRAINER.NLPROMPT.THETA_GMM 0.5 TRAINER.NLPROMPT.THETA_CONS 0.5 TRAINER.NLPROMPT.USE_LR_BRANCH True OPTIM.MAX_EPOCH 50 TRAIN.CHECKPOINT_FREQ 10 DATASET.USE_OT False
