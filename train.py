@@ -26,7 +26,7 @@ import datasets.ucf101
 import datasets.imagenet
 
 import datasets.food101n
-
+from yacs.config import CfgNode as CN
 import datasets.cifar100n
 
 import datasets.imagenet_sketch
@@ -137,6 +137,25 @@ def extend_cfg(cfg):
     cfg.DATASET.CURRICLUM_MODE = 'linear'
     cfg.DATASET.PMODE = 'logP'
     cfg.DATASET.REG_E = 0.01
+
+
+    # ===== Hybrid prompt + Dynamic Selection =====
+    cfg.TRAINER.NLPROMPT.USE_FIXED_PROMPT = True
+    cfg.TRAINER.NLPROMPT.USE_HYBRID = True
+    cfg.TRAINER.NLPROMPT.HYBRID_ALPHA = 0.5
+
+    cfg.TRAINER.NLPROMPT.DYN_SEL = True
+    cfg.TRAINER.NLPROMPT.DYN_SEL_FREQ = 2
+    cfg.TRAINER.NLPROMPT.DYN_SEL_START_EPOCH = 0
+
+    cfg.TRAINER.NLPROMPT.THETA_GMM = 0.5
+    cfg.TRAINER.NLPROMPT.THETA_CONS = 0.5
+    cfg.TRAINER.NLPROMPT.SELECTION_INTERSECT = True
+    cfg.TRAINER.NLPROMPT.MIN_PER_CLASS = 1
+
+    cfg.TRAINER.NLPROMPT.USE_LR_BRANCH = True
+    cfg.TRAINER.NLPROMPT.LR_MAX_SAMPLES = 20000
+
 
 
 def setup_cfg(args):
